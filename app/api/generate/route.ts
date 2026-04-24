@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { generateContent } from '@/lib/gemini/client'
-import { generateHtml } from '@/lib/utils/htmlExport'
 import type { CefrLevel, DesignProfile } from '@/types'
 
 export async function POST(req: NextRequest) {
@@ -12,12 +11,10 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { companyId, level, motherTongue, topics, documentIds, requestId } = body
 
-  // Validate
   if (!companyId || !level || !motherTongue) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
   }
 
-  // Fetch company
   const { data: company, error: companyError } = await supabase
     .from('companies')
     .select('*')
@@ -29,7 +26,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Company not found' }, { status: 404 })
   }
 
-  // Update request status
   if (requestId) {
     await supabase
       .from('generation_requests')
@@ -37,14 +33,13 @@ export async function POST(req: NextRequest) {
       .eq('id', requestId)
   }
 
-  // Fetch document texts
   let extractedTexts: string[] = []
   if (documentIds && documentIds.length > 0) {
     const { data: docs } = await supabase
       .from('company_documents')
       .select('extracted_text, document_type')
       .in('id', documentIds)
-      .neq('document_type', 'design') // Exclude design files
+      .neq('document_type', 'design')
 
     if (docs) {
       extractedTexts = docs
@@ -54,7 +49,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Generate content with Gemini
     const generated = await generateContent({
       company,
       level: level as CefrLevel,
@@ -73,41 +67,18 @@ export async function POST(req: NextRequest) {
       companyName: company.name,
     }
 
-    // Generate HTML
-    const htmlContent = generateHtml(generated, design)
-
-    // Store HTML file in Supabase storage
-    const htmlFileName = `${user.id}/${companyId}/output_${Date.now()}.html`
-    const { error: uploadError } = await supabase.storage
-      .from('generated-outputs')
-      .upload(htmlFileName, htmlContent, {
-        contentType: 'text/html; charset=utf-8',
-        upsert: true,
-      })
-
-    let htmlUrl: string | undefined
-    if (!uploadError) {
-      const { data: urlData } = await supabase.storage
-        .from('generated-outputs')
-        .createSignedUrl(htmlFileName, 86400 * 7) // 7 days
-      htmlUrl = urlData?.signedUrl
-    }
-
-    // Update request as completed
     if (requestId) {
       await supabase
         .from('generation_requests')
-        .update({
-          status: 'completed',
-          output_html_url: htmlUrl,
-        })
+        .update({ status: 'completed' })
         .eq('id', requestId)
     }
 
+    // Return content and design – no files generated yet
+    // Files are generated on-demand when user clicks download buttons
     return NextResponse.json({
       success: true,
       content: generated,
-      htmlUrl,
       design,
     })
   } catch (error) {
