@@ -1,28 +1,23 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import fs from 'fs'
-import path from 'path'
 import type { CefrLevel, GeneratedContent, Company } from '@/types'
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
-let cefrReference: string | null = null
-
-function getCefrReference(): string {
-  if (!cefrReference) {
-    try {
-      const filePath = path.join(process.cwd(), 'lib/gemini/cefr_reference.md')
-      cefrReference = fs.readFileSync(filePath, 'utf-8')
-    } catch {
-      cefrReference = 'CEFR reference not available'
-    }
-  }
-  return cefrReference
+// Kortfattet CEFR-referanse (ikke full fil, for å spare tokens)
+const CEFR_SUMMARY: Record<CefrLevel, string> = {
+  A1: 'A1 (Gjennombrudd): Svært korte tekster (30-80 ord), 5-8 ord per setning. Enkle hverdagsord. Oppgavetyper: matching, ja/nei, fyll inn med ordbank, sorter ord.',
+  A2: 'A2 (Underveis): Korte tekster (80-150 ord), 8-12 ord per setning. Hverdags- og arbeidslivsvokabular. Oppgavetyper: multiple choice, sant/usant, fyll inn blank med ordbank, enkle setningsoppgaver.',
+  B1: 'B1 (Terskel): Tekster 150-300 ord, 10-20 ord per setning. Fagvokabular med omskrivinger. Oppgavetyper: åpne spørsmål, fyll inn uten ordbank, omformuler setninger, finn riktig påstand.',
 }
 
 export function getGeminiModel() {
   return genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
-    generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 16000,
+      responseMimeType: 'application/json',
+    },
   })
 }
 
@@ -44,28 +39,15 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, label = 'Gemi
 }
 
 function parseGeminiJson(raw: string): Record<string, unknown> {
-  const cleaned = raw.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/```\s*$/m, '').trim()
+  const cleaned = raw
+    .replace(/^```json\s*/m, '')
+    .replace(/^```\s*/m, '')
+    .replace(/```\s*$/m, '')
+    .trim()
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
   if (start === -1 || end === -1) throw new Error('No JSON found in Gemini response')
   return JSON.parse(cleaned.slice(start, end + 1))
-}
-
-function buildSystemPrompt(level: CefrLevel): string {
-  const cefr = getCefrReference()
-  return `Du er en ekspert på norskopplæring for voksne arbeidstakere med innvandrerbakgrunn.
-Du lager pedagogisk presist tilpasset materiell basert på Det felles europeiske rammeverket for språk (CEFR).
-
-CEFR-REFERANSE:
-${cefr}
-
-VIKTIGE REGLER:
-1. Tilpass ALT innhold NØYAKTIG til nivå ${level} jfr. CEFR-beskrivelsene ovenfor
-2. Bruk bedriftens fagspråk og terminologi, men tilpass til riktig norsknivå
-3. Alle tekster og oppgaver skal være relevante for den konkrete arbeidsplassen
-4. Ordlister skal inneholde oversettelse til deltakers morsmål
-5. Mellom hver fagtekst lages 5 oppgaver med underpunkter a–e
-6. Svar KUN med gyldig JSON. Start direkte med { – ingen annen tekst`
 }
 
 export async function generateContent(params: {
@@ -78,32 +60,33 @@ export async function generateContent(params: {
 }): Promise<GeneratedContent> {
   const { company, level, motherTongue, topics, extractedTexts, keyTerms } = params
   const topicsText = topics.length > 0 ? topics.join(', ') : 'generelle arbeidsoppgaver'
-  const termsText = keyTerms.length > 0 ? keyTerms.slice(0, 30).join(', ') : ''
+  const termsText = keyTerms.length > 0 ? keyTerms.slice(0, 20).join(', ') : ''
   const docsText = extractedTexts.length > 0
-    ? extractedTexts.map((t, i) => `--- Dokument ${i + 1} ---\n${t.slice(0, 2000)}`).join('\n\n')
+    ? extractedTexts.map((t, i) => `--- Dokument ${i + 1} ---\n${t.slice(0, 1500)}`).join('\n\n')
     : ''
 
-  const prompt = `${buildSystemPrompt(level)}
+  const cefrInfo = CEFR_SUMMARY[level]
 
-BEDRIFTSINFORMASJON:
-- Bedrift: ${company.name}
-- Bransje: ${company.industry || 'ikke oppgitt'}
-- Beskrivelse: ${company.description || 'ikke oppgitt'}
-- Fagtermer: ${termsText}
-- Fokustemaer: ${topicsText}
-- Deltakers morsmål for ordlister: ${motherTongue}
+  const prompt = `Du er ekspert på norskopplæring for voksne arbeidstakere (CEFR-nivå ${level}).
 
-${docsText ? `BEDRIFTSDOKUMENTER:\n${docsText}` : ''}
+NIVÅ ${level}: ${cefrInfo}
 
-Returner KUN dette JSON-objektet:
+BEDRIFT: ${company.name} | Bransje: ${company.industry || 'ikke oppgitt'}
+Beskrivelse: ${company.description || 'ikke oppgitt'}
+Fagtermer: ${termsText}
+Fokustemaer: ${topicsText}
+Morsmål for ordlister: ${motherTongue}
+${docsText ? `\nDOKUMENTER:\n${docsText}` : ''}
+
+Lag et komplett norskopplæringsopplegg. Returner KUN gyldig JSON:
 
 {
   "fagTekster": [
     {
-      "title": "Tittel",
-      "content": "Fagtekst på ${level}-nivå tilpasset CEFR. Bruk bedriftens kontekst.",
+      "title": "Tittel på fagtekst",
+      "content": "Fagtekst tilpasset nivå ${level} og bedriftens kontekst",
       "vocabulary": [
-        { "norwegian": "ord", "translation": "oversettelse til ${motherTongue}", "explanation": "forklaring" }
+        { "norwegian": "ord", "translation": "oversettelse til ${motherTongue}", "explanation": "kort forklaring" }
       ]
     }
   ],
@@ -113,9 +96,9 @@ Returner KUN dette JSON-objektet:
         "number": 1,
         "type": "leseforstaelse",
         "title": "Oppgave 1: Leseforståelse",
-        "instruction": "Les teksten og svar.",
+        "instruction": "Les teksten og svar på spørsmålene.",
         "subTasks": [
-          { "letter": "a", "question": "Spørsmål", "options": ["A", "B", "C"], "answer": "A" }
+          { "letter": "a", "question": "Spørsmål", "options": ["Alternativ A", "Alternativ B", "Alternativ C"], "answer": "Alternativ A" }
         ]
       }
     ]
@@ -124,25 +107,25 @@ Returner KUN dette JSON-objektet:
     { "norwegian": "ord", "translation": "oversettelse til ${motherTongue}", "explanation": "forklaring" }
   ],
   "pptSlides": [
-    { "title": "Slide", "content": ["punkt 1", "punkt 2"], "type": "title", "notes": "Talenotat" }
+    { "title": "Tittel", "content": ["punkt 1", "punkt 2"], "type": "title", "notes": "Talenotat" }
   ]
 }
 
 KRAV:
-- 3–5 fagtekster tilpasset nivå ${level}
-- 5 oppgaver per fagtekst med 5 deloppgaver a–e
-- Varier oppgavetypene: leseforstaelse, fyll_inn_blank, sorter_ord, riktig_pastand, setningsstruktur, multiple_choice, sant_usant, match_ord
-- fyll_inn_blank: spørsmål inneholder ___ der svaret mangler
-- sorter_ord: spørsmål er ordene i feil rekkefølge, answer er korrekt setning
-- sant_usant: options=["Sant","Usant"], answer="Sant" eller "Usant"
-- 15–25 ord i wordList oversatt til ${motherTongue}
-- 8–12 pptSlides`
+- Lag 3 fagtekster (ikke 5, for å holde JSON kompakt)
+- 5 oppgaver per fagtekst (oppgaver[0] = fagTekster[0] osv.)
+- Hver oppgave: 5 deloppgaver a-e
+- Oppgavetyper: leseforstaelse, fyll_inn_blank (med ___ i spørsmål), sorter_ord, sant_usant (options=["Sant","Usant"]), multiple_choice
+- 15 ord i wordList oversatt til ${motherTongue}
+- 8 pptSlides
+- Alle strenger må ha escaped anførselstegn der det trengs`
 
   const model = getGeminiModel()
   const parsed = await withRetry(
     async () => {
       const result = await model.generateContent(prompt)
-      return parseGeminiJson(result.response.text())
+      const text = result.response.text()
+      return parseGeminiJson(text)
     },
     3,
     `generateContent(${level})`
