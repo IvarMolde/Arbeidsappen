@@ -21,7 +21,7 @@ function getCefrReference(): string {
 
 export function getGeminiModel() {
   return genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash-latest',
+    model: 'gemini-2.5-flash',
     generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
   })
 }
