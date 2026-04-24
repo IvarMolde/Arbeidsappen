@@ -16,12 +16,10 @@ function GeneratePageInner() {
   const [documents, setDocuments] = useState<CompanyDocument[]>([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
-  const [exportingDocx, setExportingDocx] = useState(false)
-  const [exportingPptx, setExportingPptx] = useState(false)
-  const [uploadingDoc, setUploadingDoc] = useState(false)
+    const [uploadingDoc, setUploadingDoc] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState<{ htmlUrl?: string } | null>(null)
-  const [generatedData, setGeneratedData] = useState<{ content: GeneratedContent; design: DesignProfile; requestId?: string } | null>(null)
+  const [generatedData, setGeneratedData] = useState<{ content: GeneratedContent; design: DesignProfile } | null>(null)
 
   const [level, setLevel] = useState<CefrLevel>('A2')
   const [motherTongue, setMotherTongue] = useState('')
@@ -101,59 +99,13 @@ function GeneratePageInner() {
 
     if (data.success) {
       setSuccess({ htmlUrl: data.htmlUrl })
-      setGeneratedData({ content: data.content, design: data.design, requestId: reqRecord?.id })
+      setGeneratedData({ content: data.content, design: data.design })
     } else {
       setError(data.error || 'Generering feilet')
     }
   }
 
-  async function handleExportDocx() {
-    if (!generatedData) return
-    setExportingDocx(true)
-    setError('')
-    try {
-      const res = await fetch('/api/export/docx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: generatedData.content, design: generatedData.design, requestId: generatedData.requestId }),
-      })
-      if (!res.ok) throw new Error('DOCX-generering feilet')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `arbeidsark_${level}_${company?.name || 'bedrift'}.docx`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      setError('Kunne ikke laste ned Word-fil')
-    }
-    setExportingDocx(false)
-  }
 
-  async function handleExportPptx() {
-    if (!generatedData) return
-    setExportingPptx(true)
-    setError('')
-    try {
-      const res = await fetch('/api/export/pptx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: generatedData.content, design: generatedData.design, requestId: generatedData.requestId }),
-      })
-      if (!res.ok) throw new Error('PPTX-generering feilet')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `presentasjon_${level}_${company?.name || 'bedrift'}.pptx`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      setError('Kunne ikke laste ned PowerPoint-fil')
-    }
-    setExportingPptx(false)
-  }
 
   const levelDescriptions: Record<CefrLevel, string> = {
     A1: 'Gjennombrudd – svært enkelt, korte fraser og ord',
@@ -207,12 +159,7 @@ function GeneratePageInner() {
           <ContentPreview
             content={generatedData.content}
             design={generatedData.design}
-            htmlUrl={success.htmlUrl}
-            onExportDocx={handleExportDocx}
-            onExportPptx={handleExportPptx}
             onReset={() => { setSuccess(null); setGeneratedData(null) }}
-            exportingDocx={exportingDocx}
-            exportingPptx={exportingPptx}
           />
         )}
 
